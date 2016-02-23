@@ -22,6 +22,9 @@ import '../remote_listener.dart';
 /// suite will not be forwarded to the parent zone's print handler. However, the
 /// caller may want them to be forwarded in (for example) a browser context
 /// where they'll be visible in the development console.
+///
+/// If [mapTrace] is passed, it will be used to adjust stack traces for any
+/// errors emitted by tests.
 StreamChannel serializeSuite(AsyncFunction getMain(),
-        {bool hidePrints: true}) =>
-    RemoteListener.start(getMain, hidePrints: hidePrints);
+        {bool hidePrints: true, StackTrace mapTrace(StackTrace trace)}) =>
+    RemoteListener.start(getMain, hidePrints: hidePrints, mapTrace: mapTrace);

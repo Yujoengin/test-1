@@ -17,12 +17,17 @@ import '../backend/test_platform.dart';
 import '../util/remote_exception.dart';
 import '../utils.dart';
 
+typedef StackTrace _MapTrace(StackTrace trace);
+
 class RemoteListener {
   /// The test suite to run.
   final Suite _suite;
 
   /// The zone to forward prints to, or `null` if prints shouldn't be forwarded.
   final Zone _printZone;
+
+  /// The callback used to adjust stack traces.
+  final _MapTrace _mapTrace;
 
   /// Extracts metadata about all the tests in the function returned by
   /// [getMain] and returns a channel that will send information about them.
@@ -37,7 +42,13 @@ class RemoteListener {
   /// suite will not be forwarded to the parent zone's print handler. However,
   /// the caller may want them to be forwarded in (for example) a browser
   /// context where they'll be visible in the development console.
-  static StreamChannel start(AsyncFunction getMain(), {bool hidePrints: true}) {
+  ///
+  /// If [mapTrace] is passed, it will be used to adjust stack traces for any
+  /// errors emitted by tests.
+  static StreamChannel start(AsyncFunction getMain(), {bool hidePrints: true,
+      StackTrace mapTrace(StackTrace trace)}) {
+    if (mapTrace == null) mapTrace = (trace) => trace;
+
     // This has to be synchronous to work around sdk#25745. Otherwise, there'll
     // be an asynchronous pause before a syntax error notification is sent,
     // which will cause the send to fail entirely.
@@ -54,7 +65,7 @@ class RemoteListener {
         _sendLoadException(channel, "No top-level main() function defined.");
         return;
       } catch (error, stackTrace) {
-        _sendError(channel, error, stackTrace);
+        _sendError(channel, error, mapTrace(stackTrace));
         return;
       }
 
@@ -77,9 +88,9 @@ class RemoteListener {
           : OperatingSystem.find(message['os']);
       var platform = TestPlatform.find(message['platform']);
       var suite = new Suite(declarer.build(), platform: platform, os: os);
-      new RemoteListener._(suite, printZone)._listen(channel);
+      new RemoteListener._(suite, printZone, mapTrace)._listen(channel);
     }, onError: (error, stackTrace) {
-      _sendError(channel, error, stackTrace);
+      _sendError(channel, error, mapTrace(stackTrace));
     }, zoneSpecification: new ZoneSpecification(print: (_, __, ___, line) {
       if (printZone != null) printZone.print(line);
       channel.sink.add({"type": "print", "line": line});
@@ -104,7 +115,7 @@ class RemoteListener {
     });
   }
 
-  RemoteListener._(this._suite, this._printZone);
+  RemoteListener._(this._suite, this._printZone, this._mapTrace);
 
   /// Send information about [_suite] across [channel] and start listening for
   /// commands to run the tests.
@@ -177,7 +188,7 @@ class RemoteListener {
       channel.sink.add({
         "type": "error",
         "error": RemoteException.serialize(
-            asyncError.error, asyncError.stackTrace)
+            asyncError.error, _mapTrace(asyncError.stackTrace))
       });
     });
 

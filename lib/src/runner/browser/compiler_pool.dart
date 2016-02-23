@@ -60,11 +60,18 @@ class CompilerPool {
           import "package:stream_channel/stream_channel.dart";
 
           import "package:test/src/runner/plugin/remote_platform_helpers.dart";
-          import "package:test/src/runner/browser/post_message_channel.dart";
+          import "package:test/src/runner/browser/remote_helpers.dart";
 
           import "${p.toUri(p.absolute(dartPath))}" as test;
 
           main(_) async {
+            var mapper = await stackTraceMapper(
+                mapUrl: Uri.parse(
+                    ${JSON.encode(p.toUri(jsPath + ".map").toString())}),
+                packageRoot: Uri.parse(
+                    ${JSON.encode(p.toUri(_config.packageRoot).toString())}),
+                sdkRoot: Uri.parse(
+                    ${JSON.encode(p.toUri(sdkDir).toString())}));
             var channel = serializeSuite(() => test.main, hidePrints: false);
             postMessageChannel().pipe(channel);
           }

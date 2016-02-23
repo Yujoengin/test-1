@@ -7,6 +7,13 @@ import 'dart:html';
 
 import 'package:stream_channel/stream_channel.dart';
 
+import '../../util/stack_trace_mapper.dart';
+
+Future<StackTraceMapper> stackTraceMapper({Uri mapUrl, Uri packageRoot,
+    Uri sdkRoot}) async {
+  
+}
+
 /// Constructs a [StreamChannel] wrapping `postMessage` communication with the
 /// host page.
 StreamChannel postMessageChannel() {
