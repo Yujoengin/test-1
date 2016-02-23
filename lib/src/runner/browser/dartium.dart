@@ -7,7 +7,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:async/async.dart';
+import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:path/path.dart' as p;
+import 'package:vm_service_client/vm_service_client.dart';
 
 import '../../util/io.dart';
 import '../../utils.dart';
@@ -135,111 +137,54 @@ class Dartium extends Browser {
   }
 
   /// If the URL returned by [future] corresponds to the correct Observatory
-  /// instance, returns it. Otherwise, returns `null`.
+  /// instance, returns a client connected to it. Otherwise, returns `null`.
   ///
   /// If the returned operation is canceled before it fires, the WebSocket
   /// connection with the given Observatory will be closed immediately.
-  static CancelableOperation<Uri> _checkObservatoryUrl(Future<Uri> future) {
-    var webSocket;
+  static CancelableOperation<VMServiceClient> _checkObservatoryUrl(
+      Future<Uri> future) {
+    var client;
+    var subscription;
     var canceled = false;
     var completer = new CancelableCompleter(onCancel: () {
       canceled = true;
-      if (webSocket != null) webSocket.close();
-    });
 
-    // We've encountered a format we don't understand. Close the web socket and
-    // complete to null.
-    giveUp() {
-      webSocket.close();
-      if (!completer.isCompleted) completer.complete();
-    }
+      return Future.wait([
+        (subscription == null ? null : subscription.cancel()) ??
+            new Future.value(),
+        return client == null ? new Future.value() : client.close()
+      ]);
+    });
 
     future.then((url) async {
       try {
-        webSocket = await WebSocket.connect(
-            url.replace(scheme: 'ws', path: '/ws').toString());
+        client = await Client.connect(url);
+        print("HERE");
         if (canceled) {
-          webSocket.close();
-          return null;
+          client.close();
+          return;
         }
 
-        webSocket.add(JSON.encode({
-          "jsonrpc": "2.0",
-          "method": "streamListen",
-          "params": {"streamId": "Isolate"},
-          "id": "0"
-        }));
-
-        webSocket.add(JSON.encode({
-          "jsonrpc": "2.0",
-          "method": "getVM",
-          "params": {},
-          "id": "1"
-        }));
-
-        webSocket.listen((response) {
-          try {
-            response = JSON.decode(response);
-          } on FormatException catch (_) {
-            giveUp();
-            return;
-          }
-
-          // If there's a "response" key, we're probably talking to the pre-1.0
-          // VM service protocol, in which case we should just give up.
-          if (response is! Map || response.containsKey("response")) {
-            giveUp();
-            return;
-          }
-
-          if (response["id"] == "0") return;
-
-          if (response["id"] == "1") {
-            var result = response["result"];
-            if (result is! Map) {
-              giveUp();
-              return;
-            }
-
-            var isolates = result["isolates"];
-            if (isolates is! List) {
-              giveUp();
-              return;
-            }
-
-            if (isolates.isNotEmpty) {
-              webSocket.close();
-              if (!completer.isCompleted) completer.complete(url);
-            }
-            return;
-          }
-
-          // The 1.0 protocol used a raw "event" key, while the 2.0 protocol
-          // wraps it in JSON-RPC method params.
-          var event;
-          if (response.containsKey("event")) {
-            event = response["event"];
-          } else {
-            var params = response["params"];
-            if (params is Map) event = params["event"];
-          }
-
-          if (event is! Map) {
-            giveUp();
-            return;
-          }
-
-          if (event["kind"] != "IsolateStart") return;
-          webSocket.close();
-          if (completer.isCompleted) return;
-
-          // TODO(nweiz): include the isolate ID in the URL?
-          completer.complete(url);
+        subscription = client.onIsolateStart.listen((_) {
+          subscription.cancel();
+          if (!completer.isCompleted) completer.complete(client);
         });
+
+        var vm = await client.getVM();
+        if (canceled) return;
+
+        if (vm.isolates.isNotEmpty && !completer.isCompleted) {
+          subscription.cancel();
+          completer.complete(client);
+        }
       } on IOException catch (_) {
         // IO exceptions are probably caused by connecting to an
         // incorrect WebSocket that already closed.
-        return null;
+        return;
+      } on rpc.RpcException catch (_) {
+        // JSON-RPC exceptions are probably caused by connecting to an
+        // unsupported protocol version.
+        return;
       }
     }).catchError((error, stackTrace) {
       if (!completer.isCompleted) completer.completeError(error, stackTrace);
